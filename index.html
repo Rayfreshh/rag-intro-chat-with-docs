@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Chat Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .chat-container {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            height: 400px;
+            overflow-y: auto;
+            padding: 20px;
+            margin-bottom: 20px;
+            background-color: #fafafa;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .user-message {
+            background-color: #007bff;
+            color: white;
+            margin-left: 20%;
+            text-align: right;
+        }
+        .bot-message {
+            background-color: #e9ecef;
+            color: #333;
+            margin-right: 20%;
+        }
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+        #questionInput {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+        #askButton {
+            padding: 12px 24px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #askButton:hover {
+            background-color: #0056b3;
+        }
+        #askButton:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+        .example-questions {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+        }
+        .example-questions h3 {
+            margin-top: 0;
+            color: #495057;
+        }
+        .example-question {
+            background-color: #e9ecef;
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+        .example-question:hover {
+            background-color: #dee2e6;
+            border-color: #adb5bd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>RAG Chat Interface</h1>
+        <div class="chat-container" id="chatContainer">
+            <div class="message bot-message">
+                Hello! I can answer questions about AI news articles. Ask me anything about the topics in the knowledge base.
+            </div>
+        </div>
+        
+        <div class="loading" id="loading">
+            Thinking...
+        </div>
+        
+        <div class="input-container">
+            <input type="text" id="questionInput" placeholder="Enter your question here..." />
+            <button id="askButton" onclick="askQuestion()">Ask</button>
+        </div>
+        
+        <div class="example-questions">
+            <h3>Example Questions:</h3>
+            <div class="example-question" onclick="setQuestion('What is AI replacing TV writers?')">
+                What is AI replacing TV writers?
+            </div>
+            <div class="example-question" onclick="setQuestion('Tell me about Databricks')">
+                Tell me about Databricks
+            </div>
+            <div class="example-question" onclick="setQuestion('What are the latest developments in generative AI?')">
+                What are the latest developments in generative AI?
+            </div>
+            <div class="example-question" onclick="setQuestion('How is AI being used in supply chain management?')">
+                How is AI being used in supply chain management?
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function setQuestion(question) {
+            document.getElementById('questionInput').value = question;
+        }
+
+        function addMessage(message, isUser = false) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+            messageDiv.textContent = message;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function showLoading(show) {
+            const loading = document.getElementById('loading');
+            const button = document.getElementById('askButton');
+            const input = document.getElementById('questionInput');
+            
+            if (show) {
+                loading.style.display = 'block';
+                button.disabled = true;
+                input.disabled = true;
+            } else {
+                loading.style.display = 'none';
+                button.disabled = false;
+                input.disabled = false;
+            }
+        }
+
+        async function askQuestion() {
+            const question = document.getElementById('questionInput').value.trim();
+            if (!question) return;
+
+            addMessage(question, true);
+            showLoading(true);
+            
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ question: question })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                addMessage(data.answer);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('Sorry, there was an error processing your question. Please make sure the backend server is running.');
+            } finally {
+                showLoading(false);
+                document.getElementById('questionInput').value = '';
+            }
+        }
+
+        // Allow Enter key to submit question
+        document.getElementById('questionInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                askQuestion();
+            }
+        });
+    </script>
+</body>
+</html>

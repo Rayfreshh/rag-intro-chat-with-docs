@@ -94,3 +94,4 @@ websocket-client==1.8.0
 websockets==12.0
 wrapt==1.16.0
 zipp==3.19.2
+PyPDF2==3.0.1
