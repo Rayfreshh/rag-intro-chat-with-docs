@@ -3,14 +3,10 @@ from dotenv import load_dotenv
 import chromadb
 from openai import OpenAI
 from chromadb.utils import embedding_functions
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-import PyPDF2
 
 # Load environment variables from .env file
 load_dotenv()
+
 # Ensure CHROMA_OPENAI_API_KEY is set if not already
 openai_key = os.getenv("OPENAI_API_KEY")
 if not os.getenv("CHROMA_OPENAI_API_KEY") and openai_key:
@@ -28,42 +24,33 @@ collection = chroma_client.get_or_create_collection(
 
 client = OpenAI(api_key=openai_key)
 
-# FastAPI app
-app = FastAPI(title="RAG Chat API")
+resp = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {
+            "role": "user",
+            "content": "What is human life expectancy in the United States?",
+        },
+    ],
+)
 
-class QuestionRequest(BaseModel):
-    question: str
+print(resp.choices[0].message.content)
 
-# Function to extract text from PDF
-def extract_pdf_text(pdf_path):
-    text = ""
-    try:
-        with open(pdf_path, "rb") as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-    except Exception as e:
-        print(f"Error reading PDF {pdf_path}: {e}")
-    return text
 
 # Function to load documents from a directory
 def load_documents_from_directory(directory_path):
-    print("Loading documents from directory...")
+    print("==== Loading documents from directory ====")
     documents = []
     for filename in os.listdir(directory_path):
-        file_path = os.path.join(directory_path, filename)
-        
         if filename.endswith(".txt"):
-            with open(file_path, "r", encoding="utf-8") as file:
+            with open(
+                os.path.join(directory_path, filename), "r", encoding="utf-8"
+            ) as file:
                 documents.append({"id": filename, "text": file.read()})
-        elif filename.endswith(".pdf"):
-            pdf_text = extract_pdf_text(file_path)
-            if pdf_text.strip():
-                documents.append({"id": filename, "text": pdf_text})
-            else:
-                print(f"Warning: No text extracted from {filename}")
-                
     return documents
+print("Run up to here")
+
 
 # Function to split text into chunks
 def split_text(text, chunk_size=1000, chunk_overlap=20):
@@ -75,19 +62,60 @@ def split_text(text, chunk_size=1000, chunk_overlap=20):
         start = end - chunk_overlap
     return chunks
 
+# Load documents from the directory
+directory_path = "./news_articles"
+documents = load_documents_from_directory(directory_path)
+
+print(f"Loaded {len(documents)} documents")
+# Split documents into chunks
+chunked_documents = []
+for doc in documents:
+    chunks = split_text(doc["text"])
+    print("==== Splitting docs into chunks ====")
+    for i, chunk in enumerate(chunks):
+        chunked_documents.append({"id": f"{doc['id']}_chunk{i+1}", "text": chunk})
+
+# print(f"Split documents into {len(chunked_documents)} chunks")
+
+
 # Function to generate embeddings using OpenAI API
 def get_openai_embedding(text):
     response = client.embeddings.create(input=text, model="text-embedding-3-small")
     embedding = response.data[0].embedding
+    print("==== Generating embeddings... ====")
     return embedding
+
+
+# Generate embeddings for the document chunks
+for doc in chunked_documents:
+    print("==== Generating embeddings... ====")
+    doc["embedding"] = get_openai_embedding(doc["text"])
+
+if chunked_documents:  # Only print if there are documents
+    print(chunked_documents[0]["embedding"])
+
+# Upsert documents with embeddings into Chroma
+for doc in chunked_documents:
+    print("==== Inserting chunks into db;;; ====")
+    collection.upsert(
+        ids=[doc["id"]], documents=[doc["text"]], embeddings=[doc["embedding"]]
+    )
 
 
 # Function to query documents
 def query_documents(question, n_results=2):
+    # query_embedding = get_openai_embedding(question)
     results = collection.query(query_texts=question, n_results=n_results)
+
     # Extract the relevant chunks
     relevant_chunks = [doc for sublist in results["documents"] for doc in sublist]
+    print("==== Returning relevant chunks ====")
     return relevant_chunks
+    # for idx, document in enumerate(results["documents"][0]):
+    #     doc_id = results["ids"][0][idx]
+    #     distance = results["distances"][0][idx]
+    #     print(f"Found document chunk: {document} (ID: {doc_id}, Distance: {distance})")
+
 
 # Function to generate a response from OpenAI
 def generate_response(question, relevant_chunks):
@@ -117,67 +145,11 @@ def generate_response(question, relevant_chunks):
     return answer
 
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_html():
-    with open("index.html", "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
+# Example query
+# query_documents("tell me about AI replacing TV writers strike.")
+# Example query and response generation
+question = "tell me about databricks"
+relevant_chunks = query_documents(question)
+answer = generate_response(question, relevant_chunks)
 
-@app.post("/ask")
-async def ask_question(request: QuestionRequest):
-    try:
-        relevant_chunks = query_documents(request.question)
-        answer = generate_response(request.question, relevant_chunks)
-        return {"answer": answer.content}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Initialize documents on startup
-def initialize_documents():
-    try:
-        # Check if collection already has documents
-        existing_count = collection.count()
-        if existing_count > 0:
-            print(f"Documents already loaded: {existing_count} chunks in database")
-            return
-            
-        # Load documents from the directory
-        directory_path = "./news_articles"
-        documents = load_documents_from_directory(directory_path)
-        
-        if not documents:
-            print("No documents found in news_articles directory")
-            return
-
-        print(f"Loaded {len(documents)} documents")
-        
-        # Split documents into chunks
-        chunked_documents = []
-        for doc in documents:
-            chunks = split_text(doc["text"])
-            print(f"Splitting {doc['id']} into chunks")
-            for i, chunk in enumerate(chunks):
-                chunked_documents.append({"id": f"{doc['id']}_chunk{i+1}", "text": chunk})
-
-        print(f"Split documents into {len(chunked_documents)} chunks")
-
-        # Generate embeddings and store in ChromaDB
-        for i, doc in enumerate(chunked_documents):
-            print(f"Processing chunk {i+1}/{len(chunked_documents)}")
-            doc["embedding"] = get_openai_embedding(doc["text"])
-            collection.upsert(
-                ids=[doc["id"]], 
-                documents=[doc["text"]], 
-                embeddings=[doc["embedding"]]
-            )
-
-        print("Document initialization completed!")
-        
-    except Exception as e:
-        print(f"Error initializing documents: {e}")
-
-# Run initialization when the app starts
-initialize_documents()
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+print(answer)
